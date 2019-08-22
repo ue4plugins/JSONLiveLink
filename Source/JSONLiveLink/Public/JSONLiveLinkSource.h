@@ -3,22 +3,21 @@
 #pragma once
 
 #include "ILiveLinkSource.h"
-#include "MessageEndpoint.h"
+#include "HAL/Runnable.h"
+#include "HAL/ThreadSafeBool.h"
 #include "IMessageContext.h"
-#include "ThreadSafeBool.h"
+#include "Interfaces/IPv4/IPv4Endpoint.h"
 
-#include "Networking.h"
-#include "Sockets.h"
-#include "SocketSubsystem.h"
-#include <memory>
-
+class FRunnableThread;
+class FSocket;
 class ILiveLinkClient;
+class ISocketSubsystem;
 
 class JSONLIVELINK_API FJSONLiveLinkSource : public ILiveLinkSource, public FRunnable
 {
 public:
 
-	FJSONLiveLinkSource();
+	FJSONLiveLinkSource(FIPv4Endpoint Endpoint);
 
 	virtual ~FJSONLiveLinkSource();
 
@@ -26,7 +25,7 @@ public:
 	
 	virtual void ReceiveClient(ILiveLinkClient* InClient, FGuid InSourceGuid) override;
 
-	virtual bool IsSourceStillValid() override;
+	virtual bool IsSourceStillValid() const override;
 
 	virtual bool RequestSourceShutdown() override;
 
@@ -60,25 +59,24 @@ private:
 	FText SourceType;
 	FText SourceMachineName;
 	FText SourceStatus;
-	
-	FIPv4Address DeviceIPAddr;
-	uint32 DevicePort;
-	
+
+	FIPv4Endpoint DeviceEndpoint;
+
 	// Socket to receive data on
 	FSocket* Socket;
-	
+
 	// Subsystem associated to Socket
 	ISocketSubsystem* SocketSubsystem;
-	
+
 	// Threadsafe Bool for terminating the main thread loop
 	FThreadSafeBool Stopping;
-	
+
 	// Thread to run socket operations on
 	FRunnableThread* Thread;
-	
+
 	// Name of the sockets thread
 	FString ThreadName;
-	
+
 	// Time to wait between attempted receives
 	FTimespan WaitTime;
 
@@ -87,7 +85,4 @@ private:
 
 	// Buffer to receive socket data into
 	TArray<uint8> RecvBuffer;
-	
-	// frame counter for data
-	int FrameCounter;
 };

@@ -1,40 +1,47 @@
 // Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
 
 #include "JSONLiveLinkSource.h"
+
 #include "ILiveLinkClient.h"
-#include "Async.h"
+#include "LiveLinkTypes.h"
+#include "Roles/LiveLinkAnimationRole.h"
+#include "Roles/LiveLinkAnimationTypes.h"
+
+#include "Async/Async.h"
+#include "Common/UdpSocketBuilder.h"
+#include "HAL/RunnableThread.h"
 #include "Json.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "JSONLiveLinkSource"
 
 #define RECV_BUFFER_SIZE 1024 * 1024
 
-FJSONLiveLinkSource::FJSONLiveLinkSource()
+FJSONLiveLinkSource::FJSONLiveLinkSource(FIPv4Endpoint InEndpoint)
 : Socket(nullptr)
 , Stopping(false)
 , Thread(nullptr)
 , WaitTime(FTimespan::FromMilliseconds(100))
-, FrameCounter(0)
 {
 	// defaults
-	DeviceIPAddr = FIPv4Address::Any;
-	DevicePort = 54321;
+	DeviceEndpoint = InEndpoint;
 
 	SourceStatus = LOCTEXT("SourceStatus_DeviceNotFound", "Device Not Found");
 	SourceType = LOCTEXT("JSONLiveLinkSourceType", "JSON LiveLink");
 	SourceMachineName = LOCTEXT("JSONLiveLinkSourceMachineName", "localhost");
 
 	//setup socket
-	if (DeviceIPAddr.IsMulticastAddress())
+	if (DeviceEndpoint.Address.IsMulticastAddress())
 	{
 		Socket = FUdpSocketBuilder(TEXT("JSONSOCKET"))
 			.AsNonBlocking()
 			.AsReusable()
-			.BoundToPort(DevicePort)
+			.BoundToPort(DeviceEndpoint.Port)
 			.WithReceiveBufferSize(RECV_BUFFER_SIZE)
 
 			.BoundToAddress(FIPv4Address::Any)
-			.JoinedToGroup(DeviceIPAddr)
+			.JoinedToGroup(DeviceEndpoint.Address)
 			.WithMulticastLoopback()
 			.WithMulticastTtl(2);
 					
@@ -44,8 +51,8 @@ FJSONLiveLinkSource::FJSONLiveLinkSource()
 		Socket = FUdpSocketBuilder(TEXT("JSONSOCKET"))
 			.AsNonBlocking()
 			.AsReusable()
-			.BoundToAddress(DeviceIPAddr)
-			.BoundToPort(DevicePort)
+			.BoundToAddress(DeviceEndpoint.Address)
+			.BoundToPort(DeviceEndpoint.Port)
 			.WithReceiveBufferSize(RECV_BUFFER_SIZE);
 	}
 
@@ -84,7 +91,7 @@ void FJSONLiveLinkSource::ReceiveClient(ILiveLinkClient* InClient, FGuid InSourc
 }
 
 
-bool FJSONLiveLinkSource::IsSourceStillValid()
+bool FJSONLiveLinkSource::IsSourceStillValid() const
 {
 	// Source is valid if we have a valid thread and socket
 	bool bIsSourceValid = !Stopping && Thread != nullptr && Socket != nullptr;
@@ -164,11 +171,11 @@ void FJSONLiveLinkSource::HandleReceivedData(TSharedPtr<TArray<uint8>, ESPMode::
 			bool bCreateSubject = !EncounteredSubjects.Contains(SubjectName);
 			if (bCreateSubject)
 			{
-				FLiveLinkRefSkeleton SubjectRefSkeleton;
-				TArray<FName> BoneNames;
-				BoneNames.SetNumUninitialized(BoneArray.Num());
-				TArray<int32> BoneParents;
-				BoneParents.SetNumUninitialized(BoneArray.Num());
+				FLiveLinkStaticDataStruct StaticDataStruct = FLiveLinkStaticDataStruct(FLiveLinkSkeletonStaticData::StaticStruct());
+				FLiveLinkSkeletonStaticData& StaticData = *StaticDataStruct.Cast<FLiveLinkSkeletonStaticData>();
+
+				StaticData.BoneNames.SetNumUninitialized(BoneArray.Num());
+				StaticData.BoneParents.SetNumUninitialized(BoneArray.Num());
 
 				for (int BoneIdx=0; BoneIdx < BoneArray.Num(); ++BoneIdx)
 				{
@@ -178,7 +185,7 @@ void FJSONLiveLinkSource::HandleReceivedData(TSharedPtr<TArray<uint8>, ESPMode::
 					FString BoneName;
 					if (BoneObject->TryGetStringField(TEXT("Name"), BoneName))
 					{
-						BoneNames[BoneIdx] = FName(*BoneName);
+						StaticData.BoneNames[BoneIdx] = FName(*BoneName);
 					}
 					else
 					{
@@ -189,7 +196,7 @@ void FJSONLiveLinkSource::HandleReceivedData(TSharedPtr<TArray<uint8>, ESPMode::
 					int32 BoneParentIdx;
 					if (BoneObject->TryGetNumberField("Parent", BoneParentIdx))
 					{
-						BoneParents[BoneIdx] = BoneParentIdx;
+						StaticData.BoneParents[BoneIdx] = BoneParentIdx;
 					}
 					else
 					{
@@ -198,18 +205,14 @@ void FJSONLiveLinkSource::HandleReceivedData(TSharedPtr<TArray<uint8>, ESPMode::
 					}
 				}
 
-				SubjectRefSkeleton.SetBoneNames(BoneNames);
-				SubjectRefSkeleton.SetBoneParents(BoneParents);
-
-				Client->PushSubjectSkeleton(SourceGuid, SubjectName, SubjectRefSkeleton);
+				Client->PushSubjectStaticData_AnyThread({SourceGuid, SubjectName}, ULiveLinkAnimationRole::StaticClass(), MoveTemp(StaticDataStruct));
 				EncounteredSubjects.Add(SubjectName);
 			}
 
-			FLiveLinkFrameData SubjectFrame;
-			TArray<FLiveLinkCurveElement>& CurveElements = SubjectFrame.CurveElements;
-			TArray<FTransform>& Transforms = SubjectFrame.Transforms;
-			Transforms.SetNumUninitialized(BoneArray.Num());
+			FLiveLinkFrameDataStruct FrameDataStruct = FLiveLinkFrameDataStruct(FLiveLinkAnimationFrameData::StaticStruct());
+			FLiveLinkAnimationFrameData& FrameData = *FrameDataStruct.Cast<FLiveLinkAnimationFrameData>();
 
+			FrameData.Transforms.SetNumUninitialized(BoneArray.Num());
 			for (int BoneIdx = 0; BoneIdx < BoneArray.Num(); ++BoneIdx)
 			{
 				const TSharedPtr<FJsonValue>& Bone = BoneArray[BoneIdx];
@@ -264,10 +267,10 @@ void FJSONLiveLinkSource::HandleReceivedData(TSharedPtr<TArray<uint8>, ESPMode::
 					return;
 				}
 
-				Transforms[BoneIdx] = FTransform(BoneQuat, BoneLocation, BoneScale);
+				FrameData.Transforms[BoneIdx] = FTransform(BoneQuat, BoneLocation, BoneScale);
 			}
 
-			Client->PushSubjectData(SourceGuid, SubjectName, SubjectFrame);
+			Client->PushSubjectFrameData_AnyThread({SourceGuid, SubjectName}, MoveTemp(FrameDataStruct));
 		}
 	}
 }

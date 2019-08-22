@@ -7,42 +7,27 @@ public class JSONLiveLink : ModuleRules
 	public JSONLiveLink(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		
-		PublicIncludePaths.AddRange(
-			new string[] {
-				"JSONLiveLink/Public"
-            }
-			);
-				
-		
-		PrivateIncludePaths.AddRange(
-			new string[] {
-				"JSONLiveLink/Private",
-            }
-			);
-			
-		
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
-                "Core",
-                "Networking",
-                "Sockets",
-                "LiveLinkInterface"
-            }
-			);
-			
-		
+				"Core",
+				"LiveLinkInterface",
+				"Messaging",
+			});
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-                "CoreUObject",
-                "Engine",
-                "Slate",
-                "SlateCore",
-                "Json",
-                "JsonUtilities"
-            }
-			);
+				"CoreUObject",
+				"Engine",
+				"InputCore",
+				"Json",
+				"JsonUtilities",
+				"Networking",
+				"Slate",
+				"SlateCore",
+				"Sockets",
+			});
 	}
 }
